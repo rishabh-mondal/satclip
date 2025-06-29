@@ -19,12 +19,12 @@ CHECK_MIN_FILESIZE = 10000 # 10kb
 class S2GeoDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        data_dir: str = "/data/geoclip_s2",
-        batch_size: int = 64,
+        data_dir: str = "/home/rishabh.mondal/Brick-Kilns-project/ijcai_2025_kilns/data/india_bangladesh_pakisthan_images",
+        batch_size: int = 32,
         num_workers: int = 6,
-        crop_size: int = 256,
+        crop_size: int = 640,
         val_random_split_fraction: float = 0.1,
-        transform: str = 'pretrained',
+        transform: str = 'default',
         mode: str = "both",
     ):
         super().__init__()
@@ -87,8 +87,7 @@ class S2Geo(NonGeoDataset):
     validation_filenames = [
         "index.csv",
         "images/",
-        "images/patch_0.tif",
-        "images/patch_99999.tif",
+        "images/9513354_2824804.tif",
     ]
 
     def __init__(
@@ -144,7 +143,7 @@ class S2Geo(NonGeoDataset):
 
         if self.mode == "both":
             with rasterio.open(self.filenames[index]) as f:
-                data = f.read().astype(np.float32)
+                data = f.read().astype(np.uint8).astype(np.float32) / 255.0
             #img = torch.tensor(data)
             sample["image"] = data
             
@@ -192,8 +191,9 @@ class S2Geo(NonGeoDataset):
 
         fig, ax = plt.subplots(nrows=1, ncols=ncols, figsize=(ncols * 4, 4))
 
-        ax.imshow(image[:, :, [3,2,1]] / 4000)
-        ax.axis("off")
+        if image.shape[2] >= 3:
+            ax.imshow(image[:, :, [2, 1, 0]])
+            ax.axis("off")
 
         if show_titles:
             ax.set_title(f"({sample['point'][0]:0.4f}, {sample['point'][1]:0.4f})")
