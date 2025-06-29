@@ -7,19 +7,21 @@ from datamodules.s2geo_dataset import S2GeoDataModule
 from lightning.pytorch.cli import LightningCLI
 from loss import SatCLIPLoss
 from model import SatCLIP
+from lightning.pytorch.callbacks import ModelCheckpoint
+
 
 torch.set_float32_matmul_precision('high')
 
 class SatCLIPLightningModule(lightning.pytorch.LightningModule):
     def __init__(
         self,
-        embed_dim=512,
-        image_resolution=256,
+        embed_dim=768,
+        image_resolution=640, 
         vision_layers=12,
         vision_width=768,
-        vision_patch_size=32,
-        in_channels=4,
-        le_type="grid",
+        vision_patch_size=16,
+        in_channels=3,
+        le_type="sphericalharmonics",
         pe_type="siren",
         frequency_num=16,
         max_radius=260,
@@ -110,8 +112,14 @@ class MyLightningCLI(LightningCLI):
     def add_arguments_to_parser(self, parser):
         parser.add_argument("--watchmodel", action="store_true")
 
+checkpoint_callback = ModelCheckpoint(
+    save_top_k=1,
+    monitor="val_loss",
+    mode="min",
+    every_n_epochs=1,  # or use every_n_train_steps=1000
+)
 
-def cli_main(default_config_filename="./configs/default.yaml"):
+def cli_main(default_config_filename="/home/rishabh.mondal/Brick-Kilns-project/ijcai_2025_kilns/domain_experiment/satclip/satclip/configs/default.yaml"):
     save_config_fn = default_config_filename.replace(".yaml", "-latest.yaml")
     # modify configs/default.yaml for learning rate etc.
     cli = MyLightningCLI(
@@ -122,6 +130,9 @@ def cli_main(default_config_filename="./configs/default.yaml"):
             overwrite=True,
         ),
         trainer_defaults={
+            "accelerator": "gpu",
+            "devices": 2,  # use 4 GPUs
+            "strategy": "ddp",
             "accumulate_grad_batches": 16,
             "log_every_n_steps": 10,
         },
@@ -150,10 +161,10 @@ def cli_main(default_config_filename="./configs/default.yaml"):
 
 
 if __name__ == "__main__":
-    config_fn = "./configs/default.yaml"
+    config_fn = "/home/rishabh.mondal/Brick-Kilns-project/ijcai_2025_kilns/domain_experiment/satclip/satclip/configs/default.yaml"
 
     #A100 go vroom vroom 🚗💨
-    if torch.cuda.get_device_name(device=0)=='NVIDIA A100 80GB PCIe':
+    if torch.cuda.get_device_name(device=1)=='NVIDIA A100 80GB PCIe':
         torch.backends.cuda.matmul.allow_tf32 = True
         print('Superfastmode! 🚀')
     else:
