@@ -209,16 +209,57 @@ class Transformer(nn.Module):
         return self.resblocks(x)
 
 
+# class VisionTransformer(nn.Module):
+#     def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, in_channels: int, output_dim: int):
+#         super().__init__()
+#         self.input_resolution = input_resolution
+#         self.output_dim = output_dim
+#         self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
+
+#         scale = width ** -0.5
+#         self.class_embedding = nn.Parameter(scale * torch.randn(width))
+#         self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
+#         self.ln_pre = LayerNorm(width)
+
+#         self.transformer = Transformer(width, layers, heads)
+
+#         self.ln_post = LayerNorm(width)
+#         self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
+
+#     def forward(self, x: torch.Tensor):
+#         x = self.conv1(x)  # shape = [*, width, grid, grid]
+#         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
+#         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
+#         x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
+#         x = x + self.positional_embedding.to(x.dtype)
+#         x = self.ln_pre(x)
+
+#         x = x.permute(1, 0, 2)  # NLD -> LND
+#         x = self.transformer(x)
+#         x = x.permute(1, 0, 2)  # LND -> NLD
+
+#         x = self.ln_post(x[:, 0, :])
+
+
+#         if self.proj is not None:
+#             x = x @ self.proj
+
+#         return x  # return both the class token and the grid tokens
+
 class VisionTransformer(nn.Module):
     def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, in_channels: int, output_dim: int):
         super().__init__()
         self.input_resolution = input_resolution
         self.output_dim = output_dim
+        self.width = width
+        self.patch_size = patch_size
+        self.grid_size = input_resolution // patch_size
+
         self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
 
         scale = width ** -0.5
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
-        self.positional_embedding = nn.Parameter(scale * torch.randn((input_resolution // patch_size) ** 2 + 1, width))
+        self.positional_embedding = nn.Parameter(scale * torch.randn((self.grid_size ** 2 + 1, width)))
         self.ln_pre = LayerNorm(width)
 
         self.transformer = Transformer(width, layers, heads)
@@ -226,24 +267,99 @@ class VisionTransformer(nn.Module):
         self.ln_post = LayerNorm(width)
         self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
 
-    def forward(self, x: torch.Tensor):
-        x = self.conv1(x)  # shape = [*, width, grid, grid]
-        x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
-        x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
-        x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
+    def forward(self, x: torch.Tensor, return_token_features: bool = False):
+        B = x.shape[0]
+
+        # Patchify
+        x = self.conv1(x)  # [B, width, grid, grid]
+        x_flat = x.flatten(2).transpose(1, 2)  # [B, N, width] where N = grid**2
+
+        # Add class token
+        cls_token = self.class_embedding.to(x.dtype).unsqueeze(0).expand(B, 1, -1)  # [B, 1, width]
+        x = torch.cat([cls_token, x_flat], dim=1)  # [B, 1 + N, width]
+
+        # Positional encoding and transformer
         x = x + self.positional_embedding.to(x.dtype)
         x = self.ln_pre(x)
-
-        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = x.permute(1, 0, 2)  # [1 + N, B, width]
+        # print('x shape before transformer', x.shape)
         x = self.transformer(x)
-        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = x.permute(1, 0, 2)  # [B, 1 + N, width]
+        # print('x shape after transformer', x.shape)
 
-        x = self.ln_post(x[:, 0, :])
+        # Separate class token and patch tokens
+        x_cls = self.ln_post(x[:, 0, :])  # [B, width]
+        x_patch = x[:, 1:, :]  # [B, N, width]
+        # print('x_cls shape', x_cls.shape)
+        # print('x_patch shape', x_patch.shape)
+
+        if return_token_features:
+            # reshape tokens back to [B, C, H, W]
+            x_patch = x_patch.permute(0, 2, 1).contiguous()  # [B, width, N]
+            x_patch = x_patch.view(B, self.width, self.grid_size, self.grid_size)  # [B, width, H, W]
+            return x_patch
 
         if self.proj is not None:
-            x = x @ self.proj
+            x_cls = x_cls @ self.proj  # [B, output_dim]
 
-        return x
+        return x_cls, x_patch  # [B, D], [B, width, H, W]
+
+
+    
+class VisionTransformer_detect(nn.Module):
+    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, in_channels: int, output_dim: int):
+        super().__init__()
+        self.input_resolution = input_resolution
+        self.output_dim = output_dim
+        self.width = width
+        self.patch_size = patch_size
+        self.grid_size = input_resolution // patch_size
+
+        self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=width, kernel_size=patch_size, stride=patch_size, bias=False)
+
+        scale = width ** -0.5
+        self.class_embedding = nn.Parameter(scale * torch.randn(width))
+        self.positional_embedding = nn.Parameter(scale * torch.randn((self.grid_size ** 2 + 1, width)))
+        self.ln_pre = LayerNorm(width)
+
+        self.transformer = Transformer(width, layers, heads)
+
+        self.ln_post = LayerNorm(width)
+        self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
+
+    def forward(self, x: torch.Tensor, return_token_features: bool = False):
+        B = x.shape[0]
+
+        # Patchify
+        x = self.conv1(x)  # [B, width, grid, grid]
+        x_flat = x.flatten(2).transpose(1, 2)  # [B, N, width] where N = grid**2
+
+        # Add class token
+        cls_token = self.class_embedding.to(x.dtype).unsqueeze(0).expand(B, 1, -1)  # [B, 1, width]
+        x = torch.cat([cls_token, x_flat], dim=1)  # [B, 1 + N, width]
+
+        # Positional encoding and transformer
+        x = x + self.positional_embedding.to(x.dtype)
+        x = self.ln_pre(x)
+        x = x.permute(1, 0, 2)  # [1 + N, B, width]
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # [B, 1 + N, width]
+
+        # Separate class token and patch tokens
+        x_cls = self.ln_post(x[:, 0, :])  # [B, width]
+        x_patch = x[:, 1:, :]  # [B, N, width]
+
+        if return_token_features:
+            # reshape tokens back to [B, C, H, W]
+            x_patch = x_patch.permute(0, 2, 1).contiguous()  # [B, width, N]
+            x_patch = x_patch.view(B, self.width, self.grid_size, self.grid_size)  # [B, width, H, W]
+            return x_patch
+
+        if self.proj is not None:
+            x_cls = x_cls @ self.proj  # [B, output_dim]
+
+        return x_cls, x_patch  # [B, D], [B, width, H, W]
+
 
 class SatCLIP(nn.Module):
     def __init__(self,

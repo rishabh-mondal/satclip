@@ -35,7 +35,7 @@ model:
   capacity: 256
 data:
   data_dir: /home/rishabh.mondal/Brick-Kilns-project/ijcai_2025_kilns/data/india_bangladesh_pakisthan_images
-  batch_size: 32
+  batch_size: 62
   num_workers: 8
   val_random_split_fraction: 0.1
 watchmodel: True
